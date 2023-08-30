@@ -1,0 +1,112 @@
+import { ListModal, ListStep, useTokens } from '@nftearth/reservoir-kit-ui'
+import { Button } from 'components/primitives'
+import {
+  cloneElement,
+  ComponentProps,
+  ComponentPropsWithoutRef,
+  FC,
+  ReactNode,
+  useContext,
+} from 'react'
+import { CSS } from '@stitches/react'
+import { SWRResponse } from 'swr'
+import { useAccount, useNetwork, useSigner, useSwitchNetwork } from 'wagmi'
+import { useModal } from 'connectkit'
+import { ToastContext } from 'context/ToastContextProvider'
+import { useMarketplaceChain } from 'hooks'
+
+type ListingCurrencies = ComponentPropsWithoutRef<
+  typeof ListModal
+>['currencies']
+
+type Props = {
+  token?: ReturnType<typeof useTokens>['data'][0]
+  buttonCss?: CSS
+  buttonChildren?: ReactNode
+  buttonProps?: ComponentProps<typeof Button>
+  mutate?: SWRResponse['mutate']
+}
+
+const CURRENCIES = process.env.NEXT_PUBLIC_LISTING_CURRENCIES_CHAIN
+
+type CurrencyChain = {
+  [chain: number]: ListingCurrencies
+}
+
+const List: FC<Props> = ({
+  token,
+  buttonCss,
+  buttonChildren,
+  buttonProps,
+  mutate,
+}) => {
+  const { isDisconnected } = useAccount()
+  const { setOpen } = useModal()
+  const { addToast } = useContext(ToastContext)
+
+  const marketplaceChain = useMarketplaceChain()
+  const { switchNetworkAsync } = useSwitchNetwork({
+    chainId: marketplaceChain.id,
+  })
+
+  const { data: signer } = useSigner()
+  const { chain: activeChain } = useNetwork()
+
+  const isInTheWrongNetwork = Boolean(
+    signer && marketplaceChain.id !== activeChain?.id
+  )
+
+  let listingCurrencies: CurrencyChain = JSON.parse(CURRENCIES as string)
+
+  const tokenId = token?.token?.tokenId
+  const contract = token?.token?.contract
+
+  const trigger = (
+    <Button css={buttonCss} color="primary" {...buttonProps}>
+      {buttonChildren}
+    </Button>
+  )
+
+  if (isDisconnected || isInTheWrongNetwork) {
+    return cloneElement(trigger, {
+      onClick: async () => {
+        if (switchNetworkAsync && activeChain) {
+          const chain = await switchNetworkAsync(marketplaceChain.id)
+          if (chain.id !== marketplaceChain.id) {
+            return false
+          }
+        }
+
+        if (!signer) {
+          setOpen(true)
+        }
+      },
+    })
+  } else
+    return (
+      <ListModal
+        trigger={trigger}
+        collectionId={contract}
+        tokenId={tokenId}
+        currencies={listingCurrencies[marketplaceChain.id]}
+        onClose={(data, stepData, currentStep) => {
+          if (mutate && currentStep == ListStep.Complete) mutate()
+        }}
+        onListingError={(err: any) => {
+          if (err?.code === 4001) {
+            addToast?.({
+              title: 'User canceled transaction',
+              description: 'You have canceled the transaction.',
+            })
+            return
+          }
+          addToast?.({
+            title: 'Could not list token',
+            description: 'The transaction was not completed.',
+          })
+        }}
+      />
+    )
+}
+
+export default List
